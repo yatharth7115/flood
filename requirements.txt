@@ -1,0 +1,9 @@
+torch
+pytorch-forecasting
+lightning
+pandas
+numpy
+pyarrow
+pyyaml
+matplotlib
+tabulate

@@ -1,0 +1,49 @@
+# Step 1: multi-basin LSTM vs TFT on CAMELS-IND (daily discharge)
+
+data:
+  data_dir: /content/data            # where CAMELS-IND is unzipped (Colab temporary disk)
+  zenodo_url: https://zenodo.org/records/14999580/files/CAMELS_IND_Catchments_Streamflow_Sufficient.zip?download=1
+  processed_file: /content/data/processed.parquet
+
+  # dynamic inputs (CAMELS-IND daily columns); missing ones are skipped automatically
+  dynamic_features: [prcp, tmax, tmin, tavg, srad_sw, rel_hum, pet_gleam, aet_gleam, sm_lvl1, sm_lvl2, sm_lvl3, sm_lvl4]
+
+  # static attribute files to use. "hydro" is excluded on purpose: its flow
+  # signatures are computed over all years, including the test years (leakage).
+  static_groups: [topo, land, soil, geol, anth]
+
+  # periods (1980 skipped because PET is missing for 1980)
+  train: ["1981-01-01", "2010-12-31"]
+  val:   ["2011-01-01", "2015-12-31"]
+  test:  ["2016-01-01", "2020-12-31"]
+
+  min_train_years: 10       # gauge needs >= this many years of observed flow in train period
+  min_test_days: 365        # and >= this many observed days in the test period
+  max_gauges: null          # set e.g. 40 for a quick first run, null = all gauges
+  focus_gauge_name: Anandpur
+
+model:
+  lookback: 90              # days of history the model sees
+  horizon: 7                # predict 1..7 days ahead
+
+lstm:
+  hidden: 128
+  dropout: 0.2
+  lr: 0.001
+  batch_size: 256
+  epochs: 20
+  samples_per_epoch: 200000
+  patience: 4
+
+tft:
+  hidden: 64
+  attention_heads: 4
+  dropout: 0.1
+  lr: 0.001
+  batch_size: 128
+  epochs: 15
+  train_batches_per_epoch: 800
+  patience: 4
+  quantiles: [0.1, 0.5, 0.9]
+
+results_dir: /content/results
