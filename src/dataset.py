@@ -40,6 +40,12 @@ def read_table(path, nrows=None):
 TABLE_EXT = (".csv", ".txt")
 
 
+def clean_col(c):
+    """'Prcp (mm/day)' -> 'prcp'"""
+    c = re.sub(r"[\(\[].*?[\)\]]", "", str(c)).strip().lower()
+    return re.sub(r"\s+", "_", c)
+
+
 def add_date(df):
     low = {c.lower(): c for c in df.columns}
     if "date" in low:
@@ -76,14 +82,17 @@ def is_gauge_col(c):
 def load_attributes(data_dir, groups):
     files = [f for f in glob.glob(os.path.join(data_dir, "**", "*.*"), recursive=True)
              if ATTR_RE.search(os.path.basename(f)) and f.lower().endswith(TABLE_EXT)]
-    names, static = None, []
-    for f in files:
+    names, static, seen = None, [], set()
+    for f in sorted(files, key=lambda x: not x.lower().endswith(".csv")):  # prefer .csv over .txt
         grp = ATTR_RE.search(os.path.basename(f)).group(2).lower()
+        if grp in seen:
+            continue
         try:
             df = read_table(f)
         except ValueError as e:
             print("  skipping", os.path.basename(f), "-", e)
             continue
+        seen.add(grp)
         print(f"  read {os.path.basename(f)}: {df.shape[1]} columns")
         idcol = next((c for c in df.columns if "gauge" in c.lower() or c.lower() in ("id", "gauge_id")), df.columns[0])
         df = df.rename(columns={idcol: "gauge_id"})
@@ -137,7 +146,7 @@ def load_streamflow(data_dir):
 # ---------------------------------------------------------------- forcing
 def load_forcing(data_dir, features):
     files = [f for f in glob.glob(os.path.join(data_dir, "**", "*.*"), recursive=True) if f.lower().endswith((".csv", ".txt"))]
-    per_gauge, wide = [], {}
+    per_gauge, wide, scanned = [], {}, []
     for f in files:
         base = os.path.basename(f).lower()
         if ATTR_RE.search(base) or "streamflow" in base:
@@ -148,8 +157,9 @@ def load_forcing(data_dir, features):
             continue
         if head is None:
             continue
-        cols = [c.lower() for c in head.columns]
-        if "prcp" in cols:
+        cols = [clean_col(c) for c in head.columns]
+        scanned.append((f, cols[:12]))
+        if "prcp" in cols or "precipitation" in cols:
             per_gauge.append(f)
         else:
             stem = os.path.splitext(base)[0]
@@ -160,8 +170,10 @@ def load_forcing(data_dir, features):
     if per_gauge:
         frames = []
         for f in per_gauge:
-            df = add_date(read_table(f))
-            df.columns = [c.lower() if c != "date" else c for c in df.columns]
+            df = read_table(f)
+            df.columns = [clean_col(c) for c in df.columns]
+            df = df.rename(columns={"precipitation": "prcp"})
+            df = add_date(df)
             keep = ["date"] + [c for c in features if c in df.columns]
             gid = df["gauge_id"].map(norm_id) if "gauge_id" in df.columns else gauge_from_filename(f)
             frames.append(df[keep].assign(gauge_id=gid))
@@ -175,7 +187,10 @@ def load_forcing(data_dir, features):
             long["gauge_id"] = long["gauge_id"].map(norm_id)
             forc = long if forc is None else forc.merge(long, on=["gauge_id", "date"], how="outer")
     else:
-        raise FileNotFoundError("No forcing files found. Run src/explore.py and check file names.")
+        print("Could not identify forcing files. Files scanned (first columns):")
+        for f, cols in scanned[:25]:
+            print("  ", os.path.relpath(f, data_dir), cols)
+        raise FileNotFoundError("No forcing files found. Share the list above and the explore output.")
     forc["gauge_id"] = forc["gauge_id"].map(norm_id)
     return forc.drop_duplicates(["gauge_id", "date"])
 

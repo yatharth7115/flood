@@ -25,11 +25,19 @@ def download(cfg_path="configs/step1.yaml"):
     print("Unzipping ...")
     with zipfile.ZipFile(zip_path) as z:
         z.extractall(data_dir)
-        inner = [n for n in z.namelist() if n.lower().endswith(".zip")]
-    # some releases wrap zips inside the zip
-    for name in inner:
-        with zipfile.ZipFile(os.path.join(data_dir, name)) as z2:
-            z2.extractall(data_dir)
+    # extract zips nested inside the release (any depth), once each
+    done = set()
+    while True:
+        inner = [os.path.join(r, f) for r, _, fs in os.walk(data_dir) for f in fs
+                 if f.lower().endswith(".zip") and os.path.join(r, f) != zip_path]
+        todo = [p for p in inner if p not in done]
+        if not todo:
+            break
+        for p in todo:
+            print("  extracting nested", os.path.relpath(p, data_dir))
+            with zipfile.ZipFile(p) as z2:
+                z2.extractall(os.path.dirname(p))
+            done.add(p)
     print("Done. Data is in", data_dir)
 
 
