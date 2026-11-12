@@ -22,12 +22,22 @@ SIM_WORDS = ("pred", "sim", "lstm", "model")
 
 
 # ---------------------------------------------------------------- helpers
-def read_table(path):
-    df = pd.read_csv(path, low_memory=False)
-    if df.shape[1] == 1:
-        df = pd.read_csv(path, sep=r"\s+", low_memory=False)
-    df.columns = [str(c).strip() for c in df.columns]
-    return df
+def read_table(path, nrows=None):
+    """Read a CSV/TXT whatever its separator (comma, semicolon, tab or spaces)."""
+    last = None
+    for sep in [",", ";", "\t", r"\s+"]:
+        try:
+            df = pd.read_csv(path, sep=sep, nrows=nrows, comment="#", low_memory=False)
+        except Exception as e:  # wrong separator -> try the next one
+            last = e
+            continue
+        if df.shape[1] > 1:
+            df.columns = [str(c).strip() for c in df.columns]
+            return df
+    raise ValueError(f"Could not read {path}: {last}")
+
+
+TABLE_EXT = (".csv", ".txt")
 
 
 def add_date(df):
@@ -64,11 +74,17 @@ def is_gauge_col(c):
 
 # ---------------------------------------------------------------- attributes
 def load_attributes(data_dir, groups):
-    files = [f for f in glob.glob(os.path.join(data_dir, "**", "*.*"), recursive=True) if ATTR_RE.search(os.path.basename(f))]
+    files = [f for f in glob.glob(os.path.join(data_dir, "**", "*.*"), recursive=True)
+             if ATTR_RE.search(os.path.basename(f)) and f.lower().endswith(TABLE_EXT)]
     names, static = None, []
     for f in files:
         grp = ATTR_RE.search(os.path.basename(f)).group(2).lower()
-        df = read_table(f)
+        try:
+            df = read_table(f)
+        except ValueError as e:
+            print("  skipping", os.path.basename(f), "-", e)
+            continue
+        print(f"  read {os.path.basename(f)}: {df.shape[1]} columns")
         idcol = next((c for c in df.columns if "gauge" in c.lower() or c.lower() in ("id", "gauge_id")), df.columns[0])
         df = df.rename(columns={idcol: "gauge_id"})
         df["gauge_id"] = df["gauge_id"].map(norm_id)
@@ -127,7 +143,7 @@ def load_forcing(data_dir, features):
         if ATTR_RE.search(base) or "streamflow" in base:
             continue
         try:
-            head = read_table(f).head(0) if os.path.getsize(f) < 5e8 else None
+            head = read_table(f, nrows=5)
         except Exception:
             continue
         if head is None:

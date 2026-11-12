@@ -5,6 +5,9 @@ from collections import Counter
 
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(__file__))
+from dataset import read_table  # noqa: E402
+
 
 def explore(data_dir="/content/data", max_show=15):
     exts = Counter()
@@ -34,9 +37,7 @@ def explore(data_dir="/content/data", max_show=15):
         print("\n---", os.path.relpath(p, data_dir))
         if p.lower().endswith((".csv", ".txt")):
             try:
-                df = pd.read_csv(p, nrows=3)
-                if df.shape[1] == 1:
-                    df = pd.read_csv(p, nrows=3, sep=r"\s+")
+                df = read_table(p, nrows=3)
                 print("columns:", list(df.columns)[:30], "..." if df.shape[1] > 30 else "")
                 print(df.head(2).to_string()[:600])
             except Exception as e:  # noqa
