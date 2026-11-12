@@ -15,7 +15,7 @@ Everything runs on Google Colab. The code lives in this repository and the data 
 
 ## Run Step 1
 
-1. Open `notebooks/step1_colab.ipynb` in Colab (File → Open notebook → GitHub → this repo).
+1. Open the notebook in Colab: [notebooks/step1_colab.ipynb](https://colab.research.google.com/github/yatharth7115/flood/blob/main/notebooks/step1_colab.ipynb)
 2. Runtime → Change runtime type → T4 GPU.
 3. Run the cells from top to bottom. Start with `QUICK_RUN = True` (40 gauges), then run all gauges.
 
