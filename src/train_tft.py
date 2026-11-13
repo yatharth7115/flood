@@ -64,7 +64,7 @@ def run(cfg_path="configs/step1.yaml"):
     test = TimeSeriesDataSet.from_dataset(
         training, df, min_prediction_idx=idx(d["test"][0]), stop_randomization=True)
 
-    nw = 2
+    nw = 4
     train_dl = training.to_dataloader(train=True, batch_size=c["batch_size"], num_workers=nw)
     val_dl = validation.to_dataloader(train=False, batch_size=c["batch_size"] * 4, num_workers=nw)
     test_dl = test.to_dataloader(train=False, batch_size=c["batch_size"] * 4, num_workers=nw)
@@ -77,7 +77,7 @@ def run(cfg_path="configs/step1.yaml"):
     )
     ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, dirpath=os.path.join(cfg["results_dir"], "tft_ckpt"))
     trainer = pl.Trainer(
-        max_epochs=c["epochs"], accelerator="auto", gradient_clip_val=0.1,
+        max_epochs=c["epochs"], accelerator="auto", devices=1, gradient_clip_val=0.1,
         limit_train_batches=c["train_batches_per_epoch"], limit_val_batches=300,
         callbacks=[EarlyStopping(monitor="val_loss", patience=c["patience"]), ckpt],
         enable_model_summary=False, logger=False,
@@ -86,7 +86,7 @@ def run(cfg_path="configs/step1.yaml"):
     best = TemporalFusionTransformer.load_from_checkpoint(ckpt.best_model_path)
 
     # ---- test predictions (quantiles)
-    pred = best.predict(test_dl, mode="quantiles", return_index=True, trainer_kwargs=dict(accelerator="auto", logger=False))
+    pred = best.predict(test_dl, mode="quantiles", return_index=True, trainer_kwargs=dict(accelerator="auto", devices=1, logger=False))
     out = pred.output.cpu().numpy()  # (N, H, n_quantiles)
     ind = pred.index.reset_index(drop=True)
     obs = df.set_index(["gauge_id", "time_idx"])[["q", "date"]]
@@ -106,7 +106,7 @@ def run(cfg_path="configs/step1.yaml"):
 
     # ---- which inputs mattered (variable selection weights)
     try:
-        raw = best.predict(test_dl, mode="raw", return_x=True, trainer_kwargs=dict(accelerator="auto", logger=False))
+        raw = best.predict(test_dl, mode="raw", return_x=True, trainer_kwargs=dict(accelerator="auto", devices=1, logger=False))
         interp = best.interpret_output(raw.output, reduction="sum")
         imp = []
         for kind, names in [("static", best.static_variables), ("encoder", best.encoder_variables), ("decoder", best.decoder_variables)]:
