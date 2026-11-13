@@ -13,7 +13,14 @@ Everything runs on Google Colab. The code lives in this repository and the data 
 | 3 | Curve Number runoff module and graph routing module | Planned |
 | 4 | Alert layer, dashboard, flood extent | Planned |
 
-## Run Step 1
+## Run Step 1 on Kaggle (recommended: keeps running after you close the browser)
+
+1. Open: [notebooks/step1_kaggle.ipynb on Kaggle](https://www.kaggle.com/kernels/welcome?src=https://github.com/yatharth7115/flood/blob/main/notebooks/step1_kaggle.ipynb)
+2. Right panel → Session options: Accelerator **GPU T4 x2**, Internet **On** (needs a phone-verified Kaggle account).
+3. Click **Save Version → Save & Run All (Commit) → Save**. You can close the browser.
+4. Later: open the notebook → **Output** tab for `summary.md`, the plots and `run_log.txt`.
+
+## Run Step 1 on Colab
 
 1. Open the notebook in Colab: [notebooks/step1_colab.ipynb](https://colab.research.google.com/github/yatharth7115/flood/blob/main/notebooks/step1_colab.ipynb)
 2. Runtime → Change runtime type → T4 GPU.
