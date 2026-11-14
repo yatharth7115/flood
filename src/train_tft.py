@@ -55,12 +55,15 @@ def prepare(cfg, extra=(), peak_weight=0.0):
     return df, feats, static_cols, idx, known
 
 
-def run(cfg_path="configs/step1.yaml", name="TFT", extra=(), peak_weight=0.0):
+def run(cfg_path="configs/step1.yaml", name="TFT", extra=(), peak_weight=0.0, seed=0, batches=None, batch_size=None, epochs=None):
     cfg = yaml.safe_load(open(cfg_path))
     d, c, m = cfg["data"], cfg["tft"], cfg["model"]
-    pl.seed_everything(0)
+    for k, v in (("train_batches_per_epoch", batches), ("batch_size", batch_size), ("epochs", epochs)):
+        if v:
+            c[k] = v
+    pl.seed_everything(seed)
     df, feats, static_cols, idx, known = prepare(cfg, extra, peak_weight)
-    print(f"Model {name}: extra={list(extra)} peak_weight={peak_weight} dynamic={len(feats)} known={known}")
+    print(f"Model {name}: extra={list(extra)} peak_weight={peak_weight} seed={seed} batches/epoch={c['train_batches_per_epoch']} batch={c['batch_size']} epochs={c['epochs']} dynamic={len(feats)} known={known}")
     L, H = m["lookback"], m["horizon"]
 
     training = TimeSeriesDataSet(
@@ -158,5 +161,9 @@ if __name__ == "__main__":
     ap.add_argument("--name", default="TFT")
     ap.add_argument("--extra", nargs="*", default=[])
     ap.add_argument("--peak-weight", type=float, default=0.0)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--batches", type=int, default=None)
+    ap.add_argument("--batch-size", type=int, default=None)
+    ap.add_argument("--epochs", type=int, default=None)
     a = ap.parse_args()
-    run(a.config, a.name, a.extra, a.peak_weight)
+    run(a.config, a.name, a.extra, a.peak_weight, a.seed, a.batches, a.batch_size, a.epochs)

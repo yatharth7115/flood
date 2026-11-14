@@ -6,6 +6,7 @@ summary tables as "<model>_STEP1" rows, for the same gauges.
 import argparse
 import glob
 import os
+import re
 import sys
 
 import matplotlib
@@ -38,7 +39,7 @@ def per_gauge(pred, model):
     return pd.DataFrame(rows)
 
 
-def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None):
+def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None, ref_tag="STEP1"):
     cfg = yaml.safe_load(open(cfg_path))
     R = cfg["results_dir"]
     preds = {}
@@ -59,18 +60,45 @@ def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None):
         keys = k if keys is None else keys.merge(k)
     preds = {k: v.merge(keys) for k, v in preds.items()}
 
+    # seed ensembles: models named <BASE>_S<n> with 2+ seeds -> <BASE>_ENS (mean of the seeds' predictions)
+    groups = {}
+    for k in preds:
+        mt = re.match(r"(.+)_S\d+$", k)
+        if mt:
+            groups.setdefault(mt.group(1), []).append(k)
+    for base_name, members in groups.items():
+        if len(members) < 2:
+            continue
+        cols = [c for c in ("p10", "p50", "p90") if all(c in preds[x] for x in members)]
+        ens = preds[members[0]][["gauge_id", "date", "lead", "obs"]].copy()
+        for c in cols:
+            ens[c] = sum(preds[x][c].values for x in members) / len(members)
+        preds[f"{base_name}_ENS"] = ens
+
     m = pd.concat([per_gauge(v, k) for k, v in preds.items()], ignore_index=True)
     if reference and os.path.exists(reference):
         ref = pd.read_csv(reference)
         ref["gauge_id"] = ref["gauge_id"].astype(str)
         ref = ref[ref.gauge_id.isin(set(m.gauge_id))]
-        ref["model"] = ref["model"].astype(str) + "_STEP1"
+        ref = ref[ref.lead.isin(set(m.lead))]
+        ref["model"] = ref["model"].astype(str) + f"_{ref_tag}"
         m = pd.concat([m, ref], ignore_index=True)
     m.to_csv(os.path.join(R, "metrics_per_gauge.csv"), index=False)
 
     cols = [c for c in COLS if c in m and m[c].notna().any()]
     summary = m[m.lead.isin([1, 3, 7])].groupby(["lead", "model"])[cols].median().round(3)
     summary.to_csv(os.path.join(R, "metrics_summary.csv"))
+
+    # spread across seeds: mean and std of the per-seed median NSE
+    seed_rows = []
+    for base_name, members in groups.items():
+        if len(members) < 2:
+            continue
+        med = m[m.model.isin(members) & m.lead.isin([1, 3, 7])].groupby(["lead", "model"])["NSE"].median().unstack()
+        for lead, row in med.iterrows():
+            seed_rows.append({"model": base_name, "lead": lead, "seeds": len(members),
+                              "median NSE mean": round(row.mean(), 3), "std across seeds": round(row.std(), 3)})
+    seed_tab = pd.DataFrame(seed_rows)
 
     # share of gauges where each model beats the first baseline at lead 1
     base = "LSTM_BASE" if "LSTM_BASE" in set(m.model) else sorted(set(m.model))[0]
@@ -85,6 +113,8 @@ def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None):
              f"Gauges compared: {m.gauge_id.nunique()}", "",
              "Median across gauges (discharge, m3/s):", "", summary.to_markdown(), "",
              f"Share of gauges with higher 1-day NSE than {base} (%):", "", wins.to_frame("% gauges").to_markdown(), ""]
+    if len(seed_tab):
+        lines += ["Variation across random seeds (median NSE over gauges):", "", seed_tab.to_markdown(index=False), ""]
     if focus is not None and focus in set(m.gauge_id):
         fm = m[(m.gauge_id == focus) & (m.lead.isin([1, 3, 7]))].set_index(["lead", "model"])[cols].sort_index().round(3)
         lines += [f"Focus gauge ({cfg['data']['focus_gauge_name']}, id {focus}):", "", fm.to_markdown(), ""]
@@ -147,5 +177,6 @@ if __name__ == "__main__":
     ap.add_argument("config", nargs="?", default="configs/step1.yaml")
     ap.add_argument("--reference", default=None)
     ap.add_argument("--plot", nargs="*", default=None)
+    ap.add_argument("--ref-tag", default="STEP1")
     a = ap.parse_args()
-    run(a.config, a.reference, a.plot)
+    run(a.config, a.reference, a.plot, a.ref_tag)

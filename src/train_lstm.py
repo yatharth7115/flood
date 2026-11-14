@@ -101,11 +101,13 @@ def masked_mse(pred, y, thr=None, peak_weight=0.0):
     return (w[m] * (pred[m] - y[m]) ** 2).sum() / w[m].sum()
 
 
-def run(cfg_path="configs/step1.yaml", name="LSTM", extra=(), peak_weight=0.0):
+def run(cfg_path="configs/step1.yaml", name="LSTM", extra=(), peak_weight=0.0, seed=0, lookback=None):
     cfg = yaml.safe_load(open(cfg_path))
+    if lookback:
+        cfg["model"]["lookback"] = lookback
     d, c = cfg["data"], cfg["lstm"]
-    torch.manual_seed(0)
-    np.random.seed(0)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", dev)
 
@@ -115,7 +117,7 @@ def run(cfg_path="configs/step1.yaml", name="LSTM", extra=(), peak_weight=0.0):
         from features import add_features
         df, new, _ = add_features(df, static, extra, cfg.get("peak_quantile", 0.95), d["train"][1])
         feats += new
-    print(f"Model {name}: extra={list(extra)} peak_weight={peak_weight} features={len(feats)}")
+    print(f"Model {name}: extra={list(extra)} peak_weight={peak_weight} seed={seed} lookback={cfg['model']['lookback']} features={len(feats)}")
     W = Windows(df, static, feats, cfg)
     tr_idx = W.index(*d["train"])
     va_idx = W.index(*d["val"])
@@ -192,5 +194,7 @@ if __name__ == "__main__":
     ap.add_argument("--name", default="LSTM")
     ap.add_argument("--extra", nargs="*", default=[])
     ap.add_argument("--peak-weight", type=float, default=0.0)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--lookback", type=int, default=None)
     a = ap.parse_args()
-    run(a.config, a.name, a.extra, a.peak_weight)
+    run(a.config, a.name, a.extra, a.peak_weight, a.seed, a.lookback)
