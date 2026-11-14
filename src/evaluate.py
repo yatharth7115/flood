@@ -1,4 +1,10 @@
-"""Compare LSTM and TFT on the test period (2016-2020): metrics per gauge, summary table and plots."""
+"""Compare all models that saved <name>_test_predictions.parquet in results_dir, on the test period.
+
+Optional: --reference results/step1/metrics_per_gauge.csv adds earlier results (e.g. Step 1) to the
+summary tables as "<model>_STEP1" rows, for the same gauges.
+"""
+import argparse
+import glob
 import os
 import sys
 
@@ -13,6 +19,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from metrics import all_metrics  # noqa: E402
 from dataset import find_focus  # noqa: E402
 
+COLS = ["NSE", "KGE", "RMSE", "PeakErr%", "P10-P90 coverage%"]
+
 
 def per_gauge(pred, model):
     rows = []
@@ -24,46 +32,62 @@ def per_gauge(pred, model):
     return pd.DataFrame(rows)
 
 
-def run(cfg_path="configs/step1.yaml"):
+def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None):
     cfg = yaml.safe_load(open(cfg_path))
     R = cfg["results_dir"]
     preds = {}
-    for name in ("LSTM", "TFT"):
-        p = os.path.join(R, f"{name.lower()}_test_predictions.parquet")
-        if os.path.exists(p):
-            preds[name] = pd.read_parquet(p)
-            preds[name]["gauge_id"] = preds[name]["gauge_id"].astype(str)
+    for p in sorted(glob.glob(os.path.join(R, "*_test_predictions.parquet"))):
+        name = os.path.basename(p).replace("_test_predictions.parquet", "").upper()
+        preds[name] = pd.read_parquet(p)
+        preds[name]["gauge_id"] = preds[name]["gauge_id"].astype(str)
     if not preds:
         raise FileNotFoundError("No prediction files found. Run the training scripts first.")
+    print("Models found:", list(preds))
 
-    # compare on the same gauges and dates only
-    if len(preds) == 2:
-        keys = preds["LSTM"][["gauge_id", "date", "lead"]].merge(preds["TFT"][["gauge_id", "date", "lead"]])
-        preds = {k: v.merge(keys) for k, v in preds.items()}
+    # compare every model on the same gauges, dates and leads
+    keys = None
+    for v in preds.values():
+        k = v[["gauge_id", "date", "lead"]]
+        keys = k if keys is None else keys.merge(k)
+    preds = {k: v.merge(keys) for k, v in preds.items()}
 
     m = pd.concat([per_gauge(v, k) for k, v in preds.items()], ignore_index=True)
+    if reference and os.path.exists(reference):
+        ref = pd.read_csv(reference)
+        ref["gauge_id"] = ref["gauge_id"].astype(str)
+        ref = ref[ref.gauge_id.isin(set(m.gauge_id))]
+        ref["model"] = ref["model"].astype(str) + "_STEP1"
+        m = pd.concat([m, ref], ignore_index=True)
     m.to_csv(os.path.join(R, "metrics_per_gauge.csv"), index=False)
 
-    cols = ["NSE", "KGE", "RMSE", "PeakErr%"] + (["P10-P90 coverage%"] if "P10-P90 coverage%" in m else [])
+    cols = [c for c in COLS if c in m and m[c].notna().any()]
     summary = m[m.lead.isin([1, 3, 7])].groupby(["lead", "model"])[cols].median().round(3)
     summary.to_csv(os.path.join(R, "metrics_summary.csv"))
+
+    # share of gauges where each model beats the first baseline at lead 1
+    base = "LSTM_BASE" if "LSTM_BASE" in set(m.model) else sorted(set(m.model))[0]
+    l1 = m[m.lead == 1].pivot_table(index="gauge_id", columns="model", values="NSE")
+    wins = ((l1.sub(l1[base], axis=0) > 0).mean() * 100).round(0).drop(base, errors="ignore")
 
     names_p = cfg["data"]["processed_file"].replace(".parquet", "_names.parquet")
     names = pd.read_parquet(names_p) if os.path.exists(names_p) else None
     focus = find_focus(names, cfg["data"].get("focus_gauge_name"))
 
-    lines = ["# Step 1 results: LSTM vs TFT (CAMELS-IND, test period 2016-2020)", "",
+    lines = [f"# Results on the test period ({cfg['data']['test'][0]} to {cfg['data']['test'][1]})", "",
              f"Gauges compared: {m.gauge_id.nunique()}", "",
-             "Median across gauges (discharge, m3/s):", "", summary.to_markdown(), ""]
+             "Median across gauges (discharge, m3/s):", "", summary.to_markdown(), "",
+             f"Share of gauges with higher 1-day NSE than {base} (%):", "", wins.to_frame("% gauges").to_markdown(), ""]
     if focus is not None and focus in set(m.gauge_id):
-        fm = m[(m.gauge_id == focus) & (m.lead.isin([1, 3, 7]))].set_index(["lead", "model"])[cols].round(3)
+        fm = m[(m.gauge_id == focus) & (m.lead.isin([1, 3, 7]))].set_index(["lead", "model"])[cols].sort_index().round(3)
         lines += [f"Focus gauge ({cfg['data']['focus_gauge_name']}, id {focus}):", "", fm.to_markdown(), ""]
     open(os.path.join(R, "summary.md"), "w").write("\n".join(lines))
     print("\n".join(lines))
 
+    show = [p for p in (plot_models or list(preds)) if p in preds][:4]
+
     # plot 1: NSE distribution across gauges (lead 1)
     fig, ax = plt.subplots(figsize=(6, 4))
-    for name in preds:
+    for name in show:
         v = np.sort(m[(m.model == name) & (m.lead == 1)]["NSE"].dropna().clip(-1, 1))
         ax.plot(v, np.linspace(0, 1, len(v)), label=name)
     ax.set_xlabel("NSE (1-day ahead, test period)")
@@ -73,17 +97,18 @@ def run(cfg_path="configs/step1.yaml"):
     fig.tight_layout()
     fig.savefig(os.path.join(R, "nse_cdf.png"), dpi=150)
 
-    # plot 2: hydrograph at the focus gauge (or best-observed gauge) for its wettest test year
+    # plot 2: hydrograph at the focus gauge for its wettest test year
     g = focus if focus in set(m.gauge_id) else m.gauge_id.mode()[0]
-    base = list(preds.values())[0]
-    gd = base[(base.gauge_id == g) & (base.lead == 1)].dropna(subset=["obs"])
+    base_p = preds[show[0]]
+    gd = base_p[(base_p.gauge_id == g) & (base_p.lead == 1)].dropna(subset=["obs"])
     year = pd.to_datetime(gd.loc[gd.obs.idxmax(), "date"]).year
     fig, ax = plt.subplots(figsize=(10, 4))
-    for name, p in preds.items():
-        x = p[(p.gauge_id == g) & (p.lead == 1)].copy()
+    for i, name in enumerate(show):
+        x = preds[name]
+        x = x[(x.gauge_id == g) & (x.lead == 1)].copy()
         x["date"] = pd.to_datetime(x["date"])
         x = x[x.date.dt.year == year].sort_values("date")
-        if name == list(preds)[0]:
+        if i == 0:
             ax.plot(x.date, x.obs, color="black", lw=1.5, label="Observed")
         ax.plot(x.date, x.p50, lw=1.2, label=f"{name} (1-day ahead)")
         if "p10" in x:
@@ -95,19 +120,24 @@ def run(cfg_path="configs/step1.yaml"):
     fig.tight_layout()
     fig.savefig(os.path.join(R, "hydrograph_focus.png"), dpi=150)
 
-    # plot 3: TFT variable importance
-    vi = os.path.join(R, "tft_variable_importance.csv")
-    if os.path.exists(vi):
+    # plot 3: variable importance of each TFT that saved one
+    for vi in glob.glob(os.path.join(R, "*_variable_importance.csv")):
         v = pd.read_csv(vi)
         v = v[v.type == "encoder"].sort_values("importance_%").tail(12)
+        tag = os.path.basename(vi).replace("_variable_importance.csv", "")
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.barh(v.variable, v["importance_%"])
         ax.set_xlabel("Importance (%)")
-        ax.set_title("TFT: most important past inputs")
+        ax.set_title(f"{tag.upper()}: most important past inputs")
         fig.tight_layout()
-        fig.savefig(os.path.join(R, "tft_variable_importance.png"), dpi=150)
+        fig.savefig(os.path.join(R, f"{tag}_variable_importance.png"), dpi=150)
     print("Saved metrics and plots to", R)
 
 
 if __name__ == "__main__":
-    run(sys.argv[1] if len(sys.argv) > 1 else "configs/step1.yaml")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("config", nargs="?", default="configs/step1.yaml")
+    ap.add_argument("--reference", default=None)
+    ap.add_argument("--plot", nargs="*", default=None)
+    a = ap.parse_args()
+    run(a.config, a.reference, a.plot)

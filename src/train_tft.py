@@ -4,6 +4,7 @@ Outputs P10 / P50 / P90 discharge for 1..7 days ahead and the input importance l
 the variable selection networks. Saves results/tft_test_predictions.parquet and
 results/tft_variable_importance.csv.
 """
+import argparse
 import os
 import re
 import sys
@@ -22,10 +23,22 @@ sys.path.insert(0, os.path.dirname(__file__))
 from dataset import load_processed  # noqa: E402
 
 
-def prepare(cfg):
+def prepare(cfg, extra=(), peak_weight=0.0):
     d = cfg["data"]
     df, static, _ = load_processed(cfg)
     feats = [f for f in d["dynamic_features"] if f in df.columns]
+    known = ["doy_sin", "doy_cos"]
+    if extra or peak_weight:
+        from features import add_features
+        groups = [g for g in extra if g != "future_rain"]  # TFT takes future rain as a known input instead
+        df, new, cn2 = add_features(df, static, groups, cfg.get("peak_quantile", 0.95), d["train"][1])
+        feats += new
+        if "cn" in extra:
+            static = static.assign(phys_cn=cn2.reindex(static.index))
+    if "future_rain" in extra:
+        df["prcp_fcst"] = df["prcp"].astype("float32")  # observed future rain = perfect forecast (upper bound)
+        known.append("prcp_fcst")
+    df["w"] = (1.0 + peak_weight * (df["q"] > df["q_thr"]).astype("float32")) if peak_weight else 1.0
     static = static.copy()
     static.columns = [re.sub(r"[^0-9a-zA-Z_]", "_", c) for c in static.columns]
     static_cols = list(static.columns)
@@ -39,14 +52,15 @@ def prepare(cfg):
     df["doy_cos"] = np.cos(2 * np.pi * doy / 365.25).astype("float32")
     df["gauge_id"] = df["gauge_id"].astype(str)
     idx = lambda s: int((pd.Timestamp(s) - t0).days)  # noqa: E731
-    return df, feats, static_cols, idx
+    return df, feats, static_cols, idx, known
 
 
-def run(cfg_path="configs/step1.yaml"):
+def run(cfg_path="configs/step1.yaml", name="TFT", extra=(), peak_weight=0.0):
     cfg = yaml.safe_load(open(cfg_path))
     d, c, m = cfg["data"], cfg["tft"], cfg["model"]
     pl.seed_everything(0)
-    df, feats, static_cols, idx = prepare(cfg)
+    df, feats, static_cols, idx, known = prepare(cfg, extra, peak_weight)
+    print(f"Model {name}: extra={list(extra)} peak_weight={peak_weight} dynamic={len(feats)} known={known}")
     L, H = m["lookback"], m["horizon"]
 
     training = TimeSeriesDataSet(
@@ -54,7 +68,8 @@ def run(cfg_path="configs/step1.yaml"):
         time_idx="time_idx", target="q", group_ids=["gauge_id"],
         max_encoder_length=L, min_encoder_length=L // 2, max_prediction_length=H,
         static_reals=static_cols,
-        time_varying_known_reals=["doy_sin", "doy_cos"],
+        time_varying_known_reals=known,
+        weight="w" if peak_weight else None,
         time_varying_unknown_reals=["q"] + feats,
         target_normalizer=GroupNormalizer(groups=["gauge_id"], transformation="softplus"),
         add_relative_time_idx=True, add_target_scales=True, allow_missing_timesteps=True,
@@ -75,7 +90,7 @@ def run(cfg_path="configs/step1.yaml"):
         dropout=c["dropout"], hidden_continuous_size=max(8, c["hidden"] // 2),
         loss=QuantileLoss(c["quantiles"]), reduce_on_plateau_patience=2, log_interval=-1,
     )
-    ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, dirpath=os.path.join(cfg["results_dir"], "tft_ckpt"))
+    ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, dirpath=os.path.join(cfg["results_dir"], f"{name.lower()}_ckpt"))
     trainer = pl.Trainer(
         max_epochs=c["epochs"], accelerator="auto", devices=1, gradient_clip_val=0.1,
         limit_train_batches=c["train_batches_per_epoch"], limit_val_batches=300,
@@ -101,8 +116,8 @@ def run(cfg_path="configs/step1.yaml"):
     res = pd.concat(rows, ignore_index=True).dropna(subset=["obs"])
     res = res[(res.date >= d["test"][0]) & (res.date <= d["test"][1])]
     os.makedirs(cfg["results_dir"], exist_ok=True)
-    res.to_parquet(os.path.join(cfg["results_dir"], "tft_test_predictions.parquet"), index=False)
-    print("Saved TFT test predictions:", len(res), "rows")
+    res.to_parquet(os.path.join(cfg["results_dir"], f"{name.lower()}_test_predictions.parquet"), index=False)
+    print(f"Saved {name} test predictions:", len(res), "rows")
 
     # ---- which inputs mattered (variable selection weights), from a random sample of test windows.
     # Done batch by batch so memory stays small (the full raw output does not fit in RAM).
@@ -126,14 +141,20 @@ def run(cfg_path="configs/step1.yaml"):
             w = 100 * w / w.sum()
             imp += [{"type": kind, "variable": n, "importance_%": float(v)} for n, v in zip(names, w)]
         pd.DataFrame(imp).sort_values(["type", "importance_%"], ascending=[True, False]).to_csv(
-            os.path.join(cfg["results_dir"], "tft_variable_importance.csv"), index=False)
+            os.path.join(cfg["results_dir"], f"{name.lower()}_variable_importance.csv"), index=False)
         print("Saved variable importance.")
     except Exception as e:  # interpretation is a bonus; do not fail the run
         print("Variable importance skipped:", e)
     finally:
         import shutil
-        shutil.rmtree(os.path.join(cfg["results_dir"], "tft_ckpt"), ignore_errors=True)
+        shutil.rmtree(os.path.join(cfg["results_dir"], f"{name.lower()}_ckpt"), ignore_errors=True)
 
 
 if __name__ == "__main__":
-    run(sys.argv[1] if len(sys.argv) > 1 else "configs/step1.yaml")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("config", nargs="?", default="configs/step1.yaml")
+    ap.add_argument("--name", default="TFT")
+    ap.add_argument("--extra", nargs="*", default=[])
+    ap.add_argument("--peak-weight", type=float, default=0.0)
+    a = ap.parse_args()
+    run(a.config, a.name, a.extra, a.peak_weight)

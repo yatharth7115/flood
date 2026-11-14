@@ -1,8 +1,14 @@
-"""Multi-basin LSTM baseline: 90 days of inputs -> discharge for the next 1..7 days.
+"""Multi-basin LSTM: 90 days of inputs -> discharge for the next 1..7 days.
 
 Trained on all kept CAMELS-IND gauges together (one shared model), as recommended by
-Kratzert et al. (2019, 2024). Saves test-period predictions to results/lstm_test_predictions.parquet.
+Kratzert et al. (2019, 2024). Saves test-period predictions to results/<name>_test_predictions.parquet.
+
+Step 2 options:
+  --name NAME               model name used in file names and tables (default LSTM)
+  --extra antecedent cn future_rain   extra feature groups from src/features.py
+  --peak-weight W           extra loss weight on flood days (flow above the gauge's 95th percentile)
 """
+import argparse
 import os
 import sys
 import time
@@ -30,7 +36,7 @@ class Windows:
         s = static.loc[sorted(df.gauge_id.unique())]
         self.s_norm = ((s - s.mean()) / s.std().replace(0, 1)).fillna(0)
 
-        self.gauges, self.X, self.Y, self.D = [], [], [], []
+        self.gauges, self.X, self.Y, self.D, self.T = [], [], [], [], []
         for g, gd in df.groupby("gauge_id", sort=True):
             gd = gd.set_index("date").asfreq("D")  # make daily index continuous
             x = ((gd[feats] - self.f_mean) / self.f_std).astype("float32")
@@ -43,6 +49,8 @@ class Windows:
             self.X.append(np.nan_to_num(X))
             self.Y.append(y)
             self.D.append(gd.index.values)
+            qt = gd["q_thr"].dropna() if "q_thr" in gd else pd.Series(dtype=float)
+            self.T.append(float((np.log1p(qt.iloc[0]) - self.y_mean) / self.y_std) if len(qt) else np.inf)
         self.n_in = self.X[0].shape[1]
 
     def index(self, start, end, need_all_targets=True):
@@ -66,7 +74,8 @@ class Windows:
     def batch(self, idx):
         xs = np.stack([self.X[g][t - self.L + 1: t + 1] for g, t in idx])
         ys = np.stack([self.Y[g][t + 1: t + self.H + 1] for g, t in idx])
-        return torch.from_numpy(xs), torch.from_numpy(ys)
+        thr = np.array([self.T[g] for g, _ in idx], dtype="float32")
+        return torch.from_numpy(xs), torch.from_numpy(ys), torch.from_numpy(thr)
 
     def to_q(self, y_norm):
         return np.expm1(y_norm * self.y_std + self.y_mean)
@@ -84,12 +93,15 @@ class LSTMModel(nn.Module):
         return self.head(self.drop(out[:, -1]))
 
 
-def masked_mse(pred, y):
+def masked_mse(pred, y, thr=None, peak_weight=0.0):
     m = torch.isfinite(y)
-    return ((pred[m] - y[m]) ** 2).mean()
+    w = torch.ones_like(y)
+    if peak_weight and thr is not None:
+        w = w + peak_weight * (torch.nan_to_num(y, nan=-1e9) > thr[:, None]).float()
+    return (w[m] * (pred[m] - y[m]) ** 2).sum() / w[m].sum()
 
 
-def run(cfg_path="configs/step1.yaml"):
+def run(cfg_path="configs/step1.yaml", name="LSTM", extra=(), peak_weight=0.0):
     cfg = yaml.safe_load(open(cfg_path))
     d, c = cfg["data"], cfg["lstm"]
     torch.manual_seed(0)
@@ -99,6 +111,11 @@ def run(cfg_path="configs/step1.yaml"):
 
     df, static, _ = load_processed(cfg)
     feats = [f for f in d["dynamic_features"] if f in df.columns]
+    if extra or peak_weight:
+        from features import add_features
+        df, new, _ = add_features(df, static, extra, cfg.get("peak_quantile", 0.95), d["train"][1])
+        feats += new
+    print(f"Model {name}: extra={list(extra)} peak_weight={peak_weight} features={len(feats)}")
     W = Windows(df, static, feats, cfg)
     tr_idx = W.index(*d["train"])
     va_idx = W.index(*d["val"])
@@ -117,9 +134,9 @@ def run(cfg_path="configs/step1.yaml"):
         pick = tr_idx[np.random.choice(len(tr_idx), min(c["samples_per_epoch"], len(tr_idx)), replace=False)]
         losses = []
         for i in range(0, len(pick), c["batch_size"]):
-            x, y = W.batch(pick[i: i + c["batch_size"]])
-            x, y = x.to(dev), y.to(dev)
-            loss = masked_mse(model(x), y)
+            x, y, thr = W.batch(pick[i: i + c["batch_size"]])
+            x, y, thr = x.to(dev), y.to(dev), thr.to(dev)
+            loss = masked_mse(model(x), y, thr, peak_weight)
             opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -129,7 +146,7 @@ def run(cfg_path="configs/step1.yaml"):
         with torch.no_grad():
             vl = []
             for i in range(0, len(va_sub), 2048):
-                x, y = W.batch(va_sub[i: i + 2048])
+                x, y, _ = W.batch(va_sub[i: i + 2048])
                 vl.append(masked_mse(model(x.to(dev)), y.to(dev)).item())
         vloss = float(np.mean(vl))
         sched.step(vloss)
@@ -150,7 +167,7 @@ def run(cfg_path="configs/step1.yaml"):
     with torch.no_grad():
         for i in range(0, len(te_idx), 2048):
             chunk = te_idx[i: i + 2048]
-            x, y = W.batch(chunk)
+            x, y, _ = W.batch(chunk)
             p = model(x.to(dev)).cpu().numpy()
             for h in range(cfg["model"]["horizon"]):
                 tgt = chunk[:, 1] + h + 1
@@ -164,10 +181,16 @@ def run(cfg_path="configs/step1.yaml"):
     pred = pd.concat(rows, ignore_index=True)
     pred = pred[(pred.date >= d["test"][0]) & (pred.date <= d["test"][1])]
     os.makedirs(cfg["results_dir"], exist_ok=True)
-    pred.to_parquet(os.path.join(cfg["results_dir"], "lstm_test_predictions.parquet"), index=False)
-    torch.save(model.state_dict(), os.path.join(cfg["results_dir"], "lstm_model.pt"))
-    print("Saved LSTM test predictions:", len(pred), "rows")
+    pred.to_parquet(os.path.join(cfg["results_dir"], f"{name.lower()}_test_predictions.parquet"), index=False)
+    torch.save(model.state_dict(), os.path.join(cfg["results_dir"], f"{name.lower()}_model.pt"))
+    print(f"Saved {name} test predictions:", len(pred), "rows")
 
 
 if __name__ == "__main__":
-    run(sys.argv[1] if len(sys.argv) > 1 else "configs/step1.yaml")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("config", nargs="?", default="configs/step1.yaml")
+    ap.add_argument("--name", default="LSTM")
+    ap.add_argument("--extra", nargs="*", default=[])
+    ap.add_argument("--peak-weight", type=float, default=0.0)
+    a = ap.parse_args()
+    run(a.config, a.name, a.extra, a.peak_weight)
