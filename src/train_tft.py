@@ -114,6 +114,8 @@ def run(cfg_path="configs/step1.yaml", name="TFT", extra=(), peak_weight=0.0):
             "obs": o["q"].values, "p10": out[:, h, 0], "p50": out[:, h, 1], "p90": out[:, h, 2],
         }))
     res = pd.concat(rows, ignore_index=True).dropna(subset=["obs"])
+    # around filled data gaps two windows can predict the same date at the same lead: keep one row (mean)
+    res = res.groupby(["gauge_id", "date", "lead"], as_index=False)[["obs", "p10", "p50", "p90"]].mean()
     res = res[(res.date >= d["test"][0]) & (res.date <= d["test"][1])]
     os.makedirs(cfg["results_dir"], exist_ok=True)
     res.to_parquet(os.path.join(cfg["results_dir"], f"{name.lower()}_test_predictions.parquet"), index=False)

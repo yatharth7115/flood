@@ -22,6 +22,12 @@ from dataset import find_focus  # noqa: E402
 COLS = ["NSE", "KGE", "RMSE", "PeakErr%", "P10-P90 coverage%"]
 
 
+def dedupe(v):
+    """One row per (gauge, date, lead). The TFT can predict the same target date twice around data gaps."""
+    cols = [c for c in ("obs", "p10", "p50", "p90") if c in v]
+    return v.groupby(["gauge_id", "date", "lead"], as_index=False)[cols].mean()
+
+
 def per_gauge(pred, model):
     rows = []
     for (g, lead), gd in pred.groupby(["gauge_id", "lead"]):
@@ -38,8 +44,10 @@ def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None):
     preds = {}
     for p in sorted(glob.glob(os.path.join(R, "*_test_predictions.parquet"))):
         name = os.path.basename(p).replace("_test_predictions.parquet", "").upper()
-        preds[name] = pd.read_parquet(p)
-        preds[name]["gauge_id"] = preds[name]["gauge_id"].astype(str)
+        v = pd.read_parquet(p)
+        v["gauge_id"] = v["gauge_id"].astype(str)
+        v["date"] = pd.to_datetime(v["date"])
+        preds[name] = dedupe(v.dropna(subset=["obs"]))
     if not preds:
         raise FileNotFoundError("No prediction files found. Run the training scripts first.")
     print("Models found:", list(preds))
