@@ -104,13 +104,25 @@ def run(cfg_path="configs/step1.yaml"):
     res.to_parquet(os.path.join(cfg["results_dir"], "tft_test_predictions.parquet"), index=False)
     print("Saved TFT test predictions:", len(res), "rows")
 
-    # ---- which inputs mattered (variable selection weights)
+    # ---- which inputs mattered (variable selection weights), from a random sample of test windows.
+    # Done batch by batch so memory stays small (the full raw output does not fit in RAM).
     try:
-        raw = best.predict(test_dl, mode="raw", return_x=True, trainer_kwargs=dict(accelerator="auto", devices=1, logger=False))
-        interp = best.interpret_output(raw.output, reduction="sum")
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        best = best.to(dev).eval()
+        dl = test.to_dataloader(train=False, batch_size=256, num_workers=nw, shuffle=True)
+        acc = {}
+        with torch.no_grad():
+            for i, (x, _) in enumerate(dl):
+                if i >= 80:  # about 20,000 windows
+                    break
+                x = {k: (v.to(dev) if torch.is_tensor(v) else v) for k, v in x.items()}
+                interp = best.interpret_output(best(x), reduction="sum")
+                for kind in ("static", "encoder", "decoder"):
+                    w = interp[f"{kind}_variables"].detach().cpu().numpy()
+                    acc[kind] = acc.get(kind, 0) + w
         imp = []
         for kind, names in [("static", best.static_variables), ("encoder", best.encoder_variables), ("decoder", best.decoder_variables)]:
-            w = interp[f"{kind}_variables"].cpu().numpy()
+            w = acc[kind]
             w = 100 * w / w.sum()
             imp += [{"type": kind, "variable": n, "importance_%": float(v)} for n, v in zip(names, w)]
         pd.DataFrame(imp).sort_values(["type", "importance_%"], ascending=[True, False]).to_csv(
@@ -118,6 +130,9 @@ def run(cfg_path="configs/step1.yaml"):
         print("Saved variable importance.")
     except Exception as e:  # interpretation is a bonus; do not fail the run
         print("Variable importance skipped:", e)
+    finally:
+        import shutil
+        shutil.rmtree(os.path.join(cfg["results_dir"], "tft_ckpt"), ignore_errors=True)
 
 
 if __name__ == "__main__":
