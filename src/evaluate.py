@@ -39,7 +39,7 @@ def per_gauge(pred, model):
     return pd.DataFrame(rows)
 
 
-def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None, ref_tag="STEP1"):
+def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None, ref_tag="STEP1", subset=None, subset_tag="subset", base_model=None):
     cfg = yaml.safe_load(open(cfg_path))
     R = cfg["results_dir"]
     preds = {}
@@ -101,7 +101,7 @@ def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None, ref_tag
     seed_tab = pd.DataFrame(seed_rows)
 
     # share of gauges where each model beats the first baseline at lead 1
-    base = "LSTM_BASE" if "LSTM_BASE" in set(m.model) else sorted(set(m.model))[0]
+    base = base_model if base_model in set(m.model) else ("LSTM_BASE" if "LSTM_BASE" in set(m.model) else sorted(set(m.model))[0])
     l1 = m[m.lead == 1].pivot_table(index="gauge_id", columns="model", values="NSE")
     wins = ((l1.sub(l1[base], axis=0) > 0).mean() * 100).round(0).drop(base, errors="ignore")
 
@@ -115,6 +115,16 @@ def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None, ref_tag
              f"Share of gauges with higher 1-day NSE than {base} (%):", "", wins.to_frame("% gauges").to_markdown(), ""]
     if len(seed_tab):
         lines += ["Variation across random seeds (median NSE over gauges):", "", seed_tab.to_markdown(index=False), ""]
+    if subset and os.path.exists(subset):
+        sg = set(pd.read_csv(subset, dtype=str)["gauge_id"])
+        ms = m[m.gauge_id.isin(sg)]
+        if len(ms):
+            ssum = ms[ms.lead.isin([1, 3, 7])].groupby(["lead", "model"])[cols].median().round(3)
+            ssum.to_csv(os.path.join(R, f"metrics_summary_{subset_tag}.csv"))
+            l1s = ms[ms.lead == 1].pivot_table(index="gauge_id", columns="model", values="NSE")
+            ws = ((l1s.sub(l1s[base], axis=0) > 0).mean() * 100).round(0).drop(base, errors="ignore") if base in l1s else pd.Series(dtype=float)
+            lines += [f"Only {subset_tag} gauges ({ms.gauge_id.nunique()}): median across gauges", "", ssum.to_markdown(), "",
+                      f"Share of these gauges with higher 1-day NSE than {base} (%):", "", ws.to_frame("% gauges").to_markdown(), ""]
     if focus is not None and focus in set(m.gauge_id):
         fm = m[(m.gauge_id == focus) & (m.lead.isin([1, 3, 7]))].set_index(["lead", "model"])[cols].sort_index().round(3)
         lines += [f"Focus gauge ({cfg['data']['focus_gauge_name']}, id {focus}):", "", fm.to_markdown(), ""]
@@ -178,5 +188,8 @@ if __name__ == "__main__":
     ap.add_argument("--reference", default=None)
     ap.add_argument("--plot", nargs="*", default=None)
     ap.add_argument("--ref-tag", default="STEP1")
+    ap.add_argument("--subset", default=None, help="CSV with a gauge_id column: extra summary for these gauges")
+    ap.add_argument("--subset-tag", default="subset")
+    ap.add_argument("--base", default=None, help="model to count wins against")
     a = ap.parse_args()
-    run(a.config, a.reference, a.plot, a.ref_tag)
+    run(a.config, a.reference, a.plot, a.ref_tag, a.subset, a.subset_tag, a.base)

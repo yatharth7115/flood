@@ -10,10 +10,15 @@ Everything runs on Google Colab. The code lives in this repository and the data 
 |---|---|---|
 | 1 | Multi-basin LSTM and TFT on CAMELS-IND daily data, compared on 2016–2020 | Done ([results](results/step1/summary.md)) |
 | 2 | Curve Number runoff and antecedent-rain features, flood-day weighting, future rainfall; LSTM ablation + TFT | Done ([results](results/step2/summary.md)) |
-| 3 | Fair comparison: 3 seeds, 365-day look-back, longer TFT training, CAMELS-IND benchmark | In progress |
+| 3 | Fair comparison: 3 seeds, 365-day look-back, longer TFT training, CAMELS-IND benchmark | Done ([results](results/step3/summary.md), [analysis](results/step3/analysis.md)) |
+| 4 | River graph between gauges, flood travel time, upstream flow as input | In progress |
 | 2 | Request hourly CWC water levels for Baitarani; download DEM, river network, land cover, soil | Planned |
 | 3 | Curve Number runoff module and graph routing module | Planned |
 | 4 | Alert layer, dashboard, flood extent | Planned |
+
+## Run Step 4 on Kaggle
+
+Open [notebooks/step4_kaggle.ipynb on Kaggle](https://www.kaggle.com/kernels/welcome?src=https://github.com/yatharth7115/flood/blob/main/notebooks/step4_kaggle.ipynb), set GPU and Internet On, then Save Version → Save & Run All (Commit). About 30–40 minutes.
 
 ## Run Step 3 on Kaggle
 
@@ -56,6 +61,7 @@ src/dataset.py         build one clean table (gauge, date, inputs, discharge)
 src/features.py        Step 2 features: Curve Number runoff, antecedent rain, future rain, flood weights
 src/train_lstm.py      LSTM (options: --name, --extra, --peak-weight)
 src/train_tft.py       Temporal Fusion Transformer (same options)
+src/river_graph.py     Step 4: upstream/downstream links between gauges and flood travel time
 src/benchmark_camels.py  CAMELS-IND's published LSTM predictions as a benchmark
 src/evaluate.py        metrics, seed ensembles and plots
 src/metrics.py         NSE, KGE, RMSE, peak error

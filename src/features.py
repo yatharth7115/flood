@@ -5,6 +5,9 @@ Feature groups (choose any with --extra):
   antecedent   prcp_3d, prcp_7d (rain totals), api (antecedent precipitation index, k = 0.9)
   cn           q_cn: SCS-CN direct runoff (mm/day) from today's rain, with the Curve Number set by
                land cover + soil group and adjusted for wetness (AMC from 5-day antecedent rain)
+  upstream     up_q: log of the summed observed flow of the gauges directly upstream (from the river graph
+               built by src/river_graph.py), has_up: 1 if the gauge has an upstream gauge, up_frac: share of
+               the catchment area that drains through those upstream gauges
   future_rain  prcp_f1..prcp_f7: rainfall of the next 1..7 days. Here these are OBSERVED values
                (a "perfect forecast"), so results are an upper bound; in operation they would be
                replaced by IMD / NCMRWF forecast rainfall.
@@ -22,7 +25,7 @@ CN_TABLE = {
     "water": (98, 98, 98, 98),
     "flooded_veg": (98, 98, 98, 98),
 }
-GROUPS = ("antecedent", "cn", "future_rain")
+GROUPS = ("antecedent", "cn", "future_rain", "upstream")
 HORIZON = 7
 
 
@@ -62,7 +65,7 @@ def scs_runoff(p, cn):
     return np.where(p > ia, (p - ia) ** 2 / (p - ia + s), 0.0)
 
 
-def add_features(df, static, groups, peak_q=0.95, train_end=None):
+def add_features(df, static, groups, peak_q=0.95, train_end=None, upstream=None):
     """Return df with the requested feature groups, a flood weight base column, and the new feature names."""
     groups = [g for g in groups if g in GROUPS]
     cn2 = curve_number(static)
@@ -89,6 +92,17 @@ def add_features(df, static, groups, peak_q=0.95, train_end=None):
         if "future_rain" in groups:
             for h in range(1, HORIZON + 1):
                 full[f"prcp_f{h}"] = p.shift(-h)
+        if "upstream" in groups:
+            edges, qall = upstream
+            ups = edges[edges["down"].astype(str) == str(g)]
+            if len(ups):
+                qs = qall[qall["gauge_id"].isin(ups["up"].astype(str))].pivot_table(index="date", columns="gauge_id", values="q")
+                qs = qs.reindex(full.index).interpolate(limit=3, limit_direction="both")
+                full["up_q"] = np.log1p(qs.sum(axis=1, min_count=1)).values
+                full["has_up"] = 1.0
+                full["up_frac"] = float(min(1.0, ups["area_up"].sum() / max(ups["area_down"].iloc[0], 1e-6)))
+            else:
+                full["up_q"], full["has_up"], full["up_frac"] = 0.0, 0.0, 0.0
         # flood threshold per gauge, from the training period only
         tr = full["q"] if train_end is None else full.loc[:train_end, "q"]
         full["q_thr"] = np.nanquantile(tr.values, peak_q) if tr.notna().any() else np.nan
@@ -102,6 +116,8 @@ def add_features(df, static, groups, peak_q=0.95, train_end=None):
         new += ["q_cn"]
     if "future_rain" in groups:
         new += [f"prcp_f{h}" for h in range(1, HORIZON + 1)]
+    if "upstream" in groups:
+        new += ["up_q", "has_up", "up_frac"]
     for c in new:
         res[c] = res[c].fillna(0.0).astype("float32")
     return res, new, cn2

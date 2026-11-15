@@ -115,7 +115,14 @@ def run(cfg_path="configs/step1.yaml", name="LSTM", extra=(), peak_weight=0.0, s
     feats = [f for f in d["dynamic_features"] if f in df.columns]
     if extra or peak_weight:
         from features import add_features
-        df, new, _ = add_features(df, static, extra, cfg.get("peak_quantile", 0.95), d["train"][1])
+        up = None
+        if "upstream" in extra:
+            base = os.path.dirname(d["processed_file"])
+            edges = pd.read_csv(os.path.join(base, "river_graph_edges.csv"), dtype={"up": str, "down": str})
+            qall = pd.read_parquet(d["processed_file"].replace(".parquet", "_qall.parquet"))
+            qall["gauge_id"] = qall["gauge_id"].astype(str)
+            up = (edges, qall)
+        df, new, _ = add_features(df, static, extra, cfg.get("peak_quantile", 0.95), d["train"][1], up)
         feats += new
     print(f"Model {name}: extra={list(extra)} peak_weight={peak_weight} seed={seed} lookback={cfg['model']['lookback']} features={len(feats)}")
     W = Windows(df, static, feats, cfg)

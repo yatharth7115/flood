@@ -205,6 +205,10 @@ def build(cfg_path="configs/step1.yaml"):
     print("Loading streamflow ...")
     q = load_streamflow(d["data_dir"])
     print(f"  {q['gauge_id'].nunique()} gauges with streamflow")
+    # all gauges' observed flow (also those dropped by the quality screen): used as upstream inputs in Step 4
+    os.makedirs(os.path.dirname(d["processed_file"]), exist_ok=True)
+    qa = q[(q["date"] >= d["train"][0]) & (q["date"] <= d["test"][1])]
+    qa.to_parquet(d["processed_file"].replace(".parquet", "_qall.parquet"), index=False)
     print("Loading forcing ...")
     forc = load_forcing(d["data_dir"], d["dynamic_features"])
     feats = [c for c in d["dynamic_features"] if c in forc.columns]
