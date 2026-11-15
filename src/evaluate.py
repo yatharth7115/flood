@@ -58,7 +58,19 @@ def run(cfg_path="configs/step1.yaml", reference=None, plot_models=None, ref_tag
     for v in preds.values():
         k = v[["gauge_id", "date", "lead"]]
         keys = k if keys is None else keys.merge(k)
+    # optional: restrict to the rows an earlier step was scored on, so --reference numbers are comparable
+    ref_keys = os.path.join(os.path.dirname(reference), "eval_keys.parquet") if reference else None
+    if ref_keys and os.path.exists(ref_keys):
+        rk = pd.read_parquet(ref_keys)
+        rk["gauge_id"] = rk["gauge_id"].astype(str)
+        rk["date"] = pd.to_datetime(rk["date"])
+        keys = keys.merge(rk)
+        print(f"Restricted to the {len(rk):,} rows used for the reference results")
+    elif reference:
+        print("WARNING: no eval_keys.parquet next to the reference file - reference models were scored on "
+              "other rows, so compare them with care (or rerun all models in one evaluation).")
     preds = {k: v.merge(keys) for k, v in preds.items()}
+    keys.to_parquet(os.path.join(R, "eval_keys.parquet"), index=False)
 
     # seed ensembles: models named <BASE>_S<n> with 2+ seeds -> <BASE>_ENS (mean of the seeds' predictions)
     groups = {}

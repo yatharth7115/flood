@@ -11,7 +11,7 @@ Everything runs on Google Colab. The code lives in this repository and the data 
 | 1 | Multi-basin LSTM and TFT on CAMELS-IND daily data, compared on 2016–2020 | Done ([results](results/step1/summary.md)) |
 | 2 | Curve Number runoff and antecedent-rain features, flood-day weighting, future rainfall; LSTM ablation + TFT | Done ([results](results/step2/summary.md)) |
 | 3 | Fair comparison: 3 seeds, 365-day look-back, longer TFT training, CAMELS-IND benchmark | Done ([results](results/step3/summary.md), [analysis](results/step3/analysis.md)) |
-| 4 | River graph between gauges, flood travel time, upstream flow as input | In progress |
+| 4 | River graph between gauges, flood travel time, upstream flow as input | Done: [results/step4](results/step4/analysis.md) (188 links, median flood speed ~100 km/day; upstream input gives no real gain at daily scale) |
 | 2 | Request hourly CWC water levels for Baitarani; download DEM, river network, land cover, soil | Planned |
 | 3 | Curve Number runoff module and graph routing module | Planned |
 | 4 | Alert layer, dashboard, flood extent | Planned |
