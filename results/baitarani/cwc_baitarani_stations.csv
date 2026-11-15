@@ -1,0 +1,8 @@
+code,name,river,basin,state,district,division,lat,lon,rl_zero,warning_level,danger_level,hfl,hfl_date
+013-ERDBWN,Swampatna,Baitarani,Brahmani and Baitarni,Odisha,KENDUJHAR,"Eastern Rivers Division(ERD), Bhubaneswar",21.616666666666667,85.91666666666667,302.0,,311.1,315.66,1975-08-14
+014-ERDBWN,Champua,Baitarani,Brahmani and Baitarni,Odisha,KENDUJHAR,"Eastern Rivers Division(ERD), Bhubaneswar",22.06888888888889,85.67055555555557,367.0,,,379.06,2011-09-23
+015-ERDBWN,Anandpur,Baitarani,Brahmani and Baitarni,Odisha,KENDUJHAR,"Eastern Rivers Division(ERD), Bhubaneswar",21.211111111111112,86.12055555555555,28.0,37.44,38.36,41.35,2011-09-23
+016-ERDBWN,Akhuapada,Baitarani,Brahmani and Baitarni,Odisha,BHADRAK,"Eastern Rivers Division(ERD), Bhubaneswar",20.916944444444447,86.27972222222222,0.0,17.83,18.33,21.95,1960-08-16
+055-erdbwn,Salandi Reservoir,Baitarani,Brahmani and Baitarni,Odisha,KENDUJHAR,"Eastern Rivers Division(ERD), Bhubaneswar",21.28,86.3,0.0,,,,
+067-ERDBWN,Keshdihi,Baitarani,Brahmani and Baitarni,Odisha,MAYURBHANJ,"Eastern Rivers Division(ERD), Bhubaneswar",,,,,,,
+068-ERDBWN,Bhejdih,Baitarani,Brahmani and Baitarni,Odisha,MAYURBHANJ,"Eastern Rivers Division(ERD), Bhubaneswar",21.476388888888888,86.2863888888889,289.5,,,293.41,2021-09-14
